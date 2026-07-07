@@ -1,7 +1,7 @@
 import json
 import math
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -30,6 +30,7 @@ st.markdown(
     .pill-bull {background: #dcfce7; color: #047857;}
     .pill-bear {background: #fee2e2; color: #b91c1c;}
     .pill-neutral {background: #fef3c7; color: #92400e;}
+    .warning-box {background:#fff7ed; border:1px solid #fed7aa; padding:14px; border-radius:14px; color:#9a3412;}
     @media (max-width: 700px) {
       .main-title {font-size: 1.55rem;}
       .stock-card {padding: 14px; border-radius: 14px;}
@@ -65,9 +66,9 @@ def save_watchlist(items):
 
 def pct(a, b):
     try:
-        if b == 0 or b is None or math.isnan(b):
+        if b == 0 or b is None or math.isnan(float(b)):
             return 0.0
-        return ((a - b) / b) * 100
+        return ((float(a) - float(b)) / float(b)) * 100
     except Exception:
         return 0.0
 
@@ -82,146 +83,162 @@ def safe_float(value, default=0.0):
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_history(ticker):
-    tk = yf.Ticker(ticker)
-    hist = tk.history(period="6mo", interval="1d", auto_adjust=False)
-    info = {}
+def fetch_all_history(tickers):
+    """Download all tickers in one request. This lowers the chance of Yahoo rate limits."""
+    if not tickers:
+        return pd.DataFrame(), None
+    symbols = " ".join(tickers)
     try:
-        info = tk.info or {}
+        data = yf.download(
+            tickers=symbols,
+            period="6mo",
+            interval="1d",
+            group_by="ticker",
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+        return data, None
+    except Exception as exc:
+        return pd.DataFrame(), str(exc)
+
+
+def extract_history(all_data, ticker, tickers):
+    if all_data is None or all_data.empty:
+        return pd.DataFrame()
+    try:
+        if len(tickers) == 1:
+            hist = all_data.copy()
+        elif isinstance(all_data.columns, pd.MultiIndex) and ticker in all_data.columns.get_level_values(0):
+            hist = all_data[ticker].copy()
+        else:
+            return pd.DataFrame()
+        hist = hist.dropna(how="all")
+        return hist
     except Exception:
-        info = {}
-    return hist, info
+        return pd.DataFrame()
 
 
-def analyze_stock(ticker):
-    hist, info = fetch_history(ticker)
-    if hist is None or hist.empty or len(hist) < 20:
-        return {
-            "ticker": ticker,
-            "name": info.get("shortName", ticker),
-            "price": None,
-            "change_pct": 0,
-            "score": 50,
-            "outlook": "Neutral",
-            "risk": "Unknown",
-            "reasons": ["Not enough recent price history was available to calculate a reliable signal."],
-            "risks": ["Data may be missing or delayed."],
-            "hist": hist,
-        }
-
-    close = hist["Close"].dropna()
-    volume = hist["Volume"].dropna() if "Volume" in hist else pd.Series(dtype=float)
-    price = safe_float(close.iloc[-1])
-    prev = safe_float(close.iloc[-2]) if len(close) >= 2 else price
-    change_pct = pct(price, prev)
-
-    sma5 = safe_float(close.rolling(5).mean().iloc[-1])
-    sma20 = safe_float(close.rolling(20).mean().iloc[-1])
-    sma50 = safe_float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else sma20
-
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / loss.replace(0, np.nan)
-    rsi = safe_float(100 - (100 / (1 + rs.iloc[-1])), 50)
-
-    avg_vol20 = safe_float(volume.rolling(20).mean().iloc[-1], 0) if len(volume) >= 20 else 0
-    last_vol = safe_float(volume.iloc[-1], 0) if len(volume) else 0
-    vol_ratio = last_vol / avg_vol20 if avg_vol20 else 1
-
-    ret5 = pct(price, safe_float(close.iloc[-6])) if len(close) > 6 else 0
-    ret20 = pct(price, safe_float(close.iloc[-21])) if len(close) > 21 else 0
-
-    score = 50
-    reasons = []
-    risks = []
-
-    if price > sma20:
-        score += 10
-        reasons.append("Price is above the 20-day average, showing short-term strength.")
-    else:
-        score -= 10
-        risks.append("Price is below the 20-day average, which can signal weakness.")
-
-    if sma20 > sma50:
-        score += 8
-        reasons.append("The 20-day average is above the 50-day average, which supports an upward trend.")
-    else:
-        score -= 8
-        risks.append("The 20-day average is below the 50-day average, which weakens the trend.")
-
-    if change_pct > 1:
-        score += 7
-        reasons.append("The stock finished the last session with positive momentum.")
-    elif change_pct < -1:
-        score -= 7
-        risks.append("The stock finished the last session with negative momentum.")
-
-    if ret5 > 3:
-        score += 7
-        reasons.append("Five-day momentum is strong.")
-    elif ret5 < -3:
-        score -= 7
-        risks.append("Five-day momentum is weak.")
-
-    if ret20 > 5:
-        score += 6
-        reasons.append("One-month trend is positive.")
-    elif ret20 < -5:
-        score -= 6
-        risks.append("One-month trend is negative.")
-
-    if 45 <= rsi <= 68:
-        score += 6
-        reasons.append("RSI is in a healthy momentum range, not extremely overbought or oversold.")
-    elif rsi > 75:
-        score -= 8
-        risks.append("RSI is high, so the stock may be overbought and vulnerable to profit-taking.")
-    elif rsi < 35:
-        score -= 3
-        risks.append("RSI is weak, showing selling pressure. It may rebound, but risk is elevated.")
-
-    if vol_ratio > 1.3 and change_pct > 0:
-        score += 6
-        reasons.append("Volume was above normal while price moved up, which confirms buying interest.")
-    elif vol_ratio > 1.3 and change_pct < 0:
-        score -= 6
-        risks.append("Volume was above normal while price moved down, which confirms selling pressure.")
-
-    score = int(max(0, min(100, score)))
-    if score >= 70:
-        outlook = "Likely Up"
-        risk = "Medium" if score < 82 else "Lower"
-    elif score <= 40:
-        outlook = "Likely Down"
-        risk = "High"
-    else:
-        outlook = "Neutral"
-        risk = "Medium"
-
-    if not reasons:
-        reasons.append("The signal is mixed, so the app is not seeing a strong bullish setup yet.")
-    if not risks:
-        risks.append("No major technical warning appeared, but market news can still change direction quickly.")
-
+def no_data_result(ticker, message="Market data is temporarily unavailable."):
     return {
         "ticker": ticker,
-        "name": info.get("shortName") or info.get("longName") or ticker,
-        "price": price,
-        "change_pct": change_pct,
-        "score": score,
-        "outlook": outlook,
-        "risk": risk,
-        "rsi": rsi,
-        "ret5": ret5,
-        "ret20": ret20,
-        "vol_ratio": vol_ratio,
-        "sma20": sma20,
-        "sma50": sma50,
-        "reasons": reasons,
-        "risks": risks,
-        "hist": hist.tail(60),
+        "name": ticker,
+        "price": None,
+        "change_pct": 0,
+        "score": 50,
+        "outlook": "Neutral",
+        "risk": "Unknown",
+        "rsi": 50,
+        "ret5": 0,
+        "ret20": 0,
+        "vol_ratio": 1,
+        "reasons": [message, "This usually happens when Yahoo Finance rate-limits Streamlit Cloud. Try again in a few minutes."],
+        "risks": ["Signal is incomplete until fresh market data is available."],
+        "hist": pd.DataFrame(),
     }
+
+
+def analyze_stock(ticker, hist):
+    try:
+        if hist is None or hist.empty or "Close" not in hist or len(hist.dropna(subset=["Close"])) < 20:
+            return no_data_result(ticker, "Not enough recent price history was available to calculate a reliable signal.")
+
+        close = hist["Close"].dropna()
+        volume = hist["Volume"].dropna() if "Volume" in hist else pd.Series(dtype=float)
+        price = safe_float(close.iloc[-1])
+        prev = safe_float(close.iloc[-2]) if len(close) >= 2 else price
+        change_pct = pct(price, prev)
+
+        sma20 = safe_float(close.rolling(20).mean().iloc[-1])
+        sma50 = safe_float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else sma20
+
+        delta = close.diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        rs = gain / loss.replace(0, np.nan)
+        rsi = safe_float(100 - (100 / (1 + rs.iloc[-1])), 50)
+
+        avg_vol20 = safe_float(volume.rolling(20).mean().iloc[-1], 0) if len(volume) >= 20 else 0
+        last_vol = safe_float(volume.iloc[-1], 0) if len(volume) else 0
+        vol_ratio = last_vol / avg_vol20 if avg_vol20 else 1
+
+        ret5 = pct(price, safe_float(close.iloc[-6])) if len(close) > 6 else 0
+        ret20 = pct(price, safe_float(close.iloc[-21])) if len(close) > 21 else 0
+
+        score = 50
+        reasons = []
+        risks = []
+
+        if price > sma20:
+            score += 10; reasons.append("Price is above the 20-day average, showing short-term strength.")
+        else:
+            score -= 10; risks.append("Price is below the 20-day average, which can signal weakness.")
+
+        if sma20 > sma50:
+            score += 8; reasons.append("The 20-day average is above the 50-day average, which supports an upward trend.")
+        else:
+            score -= 8; risks.append("The 20-day average is below the 50-day average, which weakens the trend.")
+
+        if change_pct > 1:
+            score += 7; reasons.append("The stock finished the last session with positive momentum.")
+        elif change_pct < -1:
+            score -= 7; risks.append("The stock finished the last session with negative momentum.")
+
+        if ret5 > 3:
+            score += 7; reasons.append("Five-day momentum is strong.")
+        elif ret5 < -3:
+            score -= 7; risks.append("Five-day momentum is weak.")
+
+        if ret20 > 5:
+            score += 6; reasons.append("One-month trend is positive.")
+        elif ret20 < -5:
+            score -= 6; risks.append("One-month trend is negative.")
+
+        if 45 <= rsi <= 68:
+            score += 6; reasons.append("RSI is in a healthy momentum range, not extremely overbought or oversold.")
+        elif rsi > 75:
+            score -= 8; risks.append("RSI is high, so the stock may be overbought and vulnerable to profit-taking.")
+        elif rsi < 35:
+            score -= 3; risks.append("RSI is weak, showing selling pressure. It may rebound, but risk is elevated.")
+
+        if vol_ratio > 1.3 and change_pct > 0:
+            score += 6; reasons.append("Volume was above normal while price moved up, which confirms buying interest.")
+        elif vol_ratio > 1.3 and change_pct < 0:
+            score -= 6; risks.append("Volume was above normal while price moved down, which confirms selling pressure.")
+
+        score = int(max(0, min(100, score)))
+        if score >= 70:
+            outlook = "Likely Up"; risk = "Medium" if score < 82 else "Lower"
+        elif score <= 40:
+            outlook = "Likely Down"; risk = "High"
+        else:
+            outlook = "Neutral"; risk = "Medium"
+
+        if not reasons:
+            reasons.append("The signal is mixed, so the app is not seeing a strong bullish setup yet.")
+        if not risks:
+            risks.append("No major technical warning appeared, but market news can still change direction quickly.")
+
+        return {
+            "ticker": ticker,
+            "name": ticker,
+            "price": price,
+            "change_pct": change_pct,
+            "score": score,
+            "outlook": outlook,
+            "risk": risk,
+            "rsi": rsi,
+            "ret5": ret5,
+            "ret20": ret20,
+            "vol_ratio": vol_ratio,
+            "sma20": sma20,
+            "sma50": sma50,
+            "reasons": reasons,
+            "risks": risks,
+            "hist": hist.tail(60),
+        }
+    except Exception as exc:
+        return no_data_result(ticker, f"A data calculation problem happened for {ticker}: {exc}")
 
 
 def outlook_class(outlook):
@@ -244,8 +261,7 @@ with st.expander("➕ Add / Delete Stocks", expanded=False):
     with c1:
         new_ticker = st.text_input("Add ticker", placeholder="Example: NVDA")
     with c2:
-        st.write("")
-        st.write("")
+        st.write(""); st.write("")
         if st.button("Add Stock", use_container_width=True):
             t = new_ticker.upper().strip().replace(" ", "")
             if t and t not in st.session_state.watchlist:
@@ -268,9 +284,19 @@ with st.expander("➕ Add / Delete Stocks", expanded=False):
 st.write("")
 run_report = st.button("☀️ Run Morning Briefing", type="primary", use_container_width=True)
 
-if run_report or True:
+if not run_report:
+    st.info("Tap **Run Morning Briefing** to check your watchlist. This version waits for your tap so it does not overload Yahoo Finance.")
+
+if run_report:
+    tickers = st.session_state.watchlist
     with st.spinner("Checking prices and calculating signals..."):
-        results = [analyze_stock(t) for t in st.session_state.watchlist]
+        all_data, data_error = fetch_all_history(tickers)
+        if data_error:
+            st.markdown(
+                f'<div class="warning-box"><b>Market data is temporarily limited.</b><br>Yahoo Finance returned a temporary data error. The app will stay open instead of crashing. Try again in a few minutes.<br><br><small>{data_error}</small></div>',
+                unsafe_allow_html=True,
+            )
+        results = [analyze_stock(t, extract_history(all_data, t, tickers)) for t in tickers]
 
     bullish = [r for r in results if r["score"] >= 70]
     bearish = [r for r in results if r["score"] <= 40]
@@ -336,7 +362,7 @@ if run_report or True:
                 st.write(f"⚠️ {item}")
             st.markdown("**Bottom line:**")
             st.write(f"{r['ticker']} currently scores **{r['score']}/100**. The outlook is **{r['outlook']}** based on the technical setup available right now.")
-            if r["hist"] is not None and not r["hist"].empty:
+            if r["hist"] is not None and not r["hist"].empty and "Close" in r["hist"]:
                 st.line_chart(r["hist"]["Close"])
 
         st.markdown('</div>', unsafe_allow_html=True)
