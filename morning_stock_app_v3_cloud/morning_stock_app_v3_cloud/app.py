@@ -1,371 +1,170 @@
-import json
-import math
-import os
-from datetime import datetime
-
-import numpy as np
+import json, os, math, random
+from datetime import datetime, timedelta
 import pandas as pd
+import numpy as np
 import streamlit as st
-import yfinance as yf
 
-APP_TITLE = "Morning Stock Intelligence"
-WATCHLIST_FILE = "watchlist.json"
-DEFAULT_WATCHLIST = ["QBTS", "GFS", "AMKR", "PLTR", "QUBT", "BLSH", "AMD", "INTC", "SPCX", "TSLA"]
+APP_TITLE='Morning Stock Intelligence Pro v4'
+WATCHLIST_FILE='watchlist.json'
+PORTFOLIO_FILE='portfolio.json'
+DEFAULT_WATCHLIST=['QBTS','GFS','AMKR','PLTR','QUBT','BLSH','AMD','INTC','SPCX','TSLA']
 
-st.set_page_config(page_title=APP_TITLE, page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title=APP_TITLE,page_icon='📈',layout='wide',initial_sidebar_state='collapsed')
 
-st.markdown(
-    """
-    <style>
-    .block-container {padding-top: 1rem; padding-bottom: 2rem; max-width: 1100px;}
-    .main-title {font-size: 2.1rem; font-weight: 800; margin-bottom: .15rem;}
-    .subtle {color: #6b7280; font-size: .95rem;}
-    .stock-card {border: 1px solid #e5e7eb; border-radius: 18px; padding: 18px; margin-bottom: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.04); background: white;}
-    .metric-label {color: #6b7280; font-size: .8rem; margin-bottom: .1rem;}
-    .metric-value {font-size: 1.25rem; font-weight: 750;}
-    .bull {color: #059669; font-weight: 800;}
-    .bear {color: #dc2626; font-weight: 800;}
-    .neutral {color: #d97706; font-weight: 800;}
-    .pill {display: inline-block; padding: 6px 10px; border-radius: 999px; font-weight: 800; font-size: .85rem;}
-    .pill-bull {background: #dcfce7; color: #047857;}
-    .pill-bear {background: #fee2e2; color: #b91c1c;}
-    .pill-neutral {background: #fef3c7; color: #92400e;}
-    .warning-box {background:#fff7ed; border:1px solid #fed7aa; padding:14px; border-radius:14px; color:#9a3412;}
-    @media (max-width: 700px) {
-      .main-title {font-size: 1.55rem;}
-      .stock-card {padding: 14px; border-radius: 14px;}
-      .metric-value {font-size: 1.05rem;}
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown('''<style>
+.block-container{padding-top:1.2rem;max-width:1120px}.hero{padding:22px;border-radius:24px;background:linear-gradient(135deg,#111827,#1f2937);color:white;margin-bottom:18px}.hero h1{margin:0;font-size:2.1rem}.sub{color:#cbd5e1}.card{border:1px solid #e5e7eb;border-radius:20px;padding:18px;margin:12px 0;background:white;box-shadow:0 4px 18px rgba(0,0,0,.05)}.darkcard{border:1px solid #374151;border-radius:20px;padding:18px;background:#111827;color:white}.pill{display:inline-block;padding:7px 12px;border-radius:999px;font-weight:800}.bull{background:#dcfce7;color:#047857}.bear{background:#fee2e2;color:#b91c1c}.neutral{background:#fef3c7;color:#92400e}.small{font-size:.88rem;color:#6b7280}.big{font-size:1.55rem;font-weight:850}.radar{border-left:5px solid #6366f1;padding:10px 14px;background:#eef2ff;border-radius:10px;margin:8px 0}@media(max-width:700px){.hero h1{font-size:1.55rem}.card{padding:14px;border-radius:16px}.big{font-size:1.2rem}}</style>''',unsafe_allow_html=True)
 
-
-def load_watchlist():
-    if os.path.exists(WATCHLIST_FILE):
+def load_json(path, default):
+    if os.path.exists(path):
         try:
-            with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return [str(x).upper().strip() for x in data if str(x).strip()]
-        except Exception:
-            return DEFAULT_WATCHLIST.copy()
-    return DEFAULT_WATCHLIST.copy()
+            with open(path,'r',encoding='utf-8') as f: return json.load(f)
+        except Exception: return default
+    return default
 
+def save_json(path, data):
+    with open(path,'w',encoding='utf-8') as f: json.dump(data,f,indent=2)
 
-def save_watchlist(items):
-    clean = []
-    for item in items:
-        ticker = str(item).upper().strip().replace(" ", "")
-        if ticker and ticker not in clean:
-            clean.append(ticker)
-    with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-        json.dump(clean, f, indent=2)
-    return clean
+def clean_ticker(t): return str(t).upper().strip().replace(' ','')
 
-
-def pct(a, b):
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_stooq(ticker):
+    # Free endpoint with graceful fallback. No Yahoo Finance dependency.
+    symbol=ticker.lower()+'.us'
+    url=f'https://stooq.com/q/d/l/?s={symbol}&i=d'
     try:
-        if b == 0 or b is None or math.isnan(float(b)):
-            return 0.0
-        return ((float(a) - float(b)) / float(b)) * 100
-    except Exception:
-        return 0.0
+        df=pd.read_csv(url)
+        if 'Close' not in df.columns or len(df)<30: raise ValueError('not enough data')
+        df['Date']=pd.to_datetime(df['Date'])
+        return df.tail(180), None
+    except Exception as e:
+        return pd.DataFrame(), str(e)
 
+def demo_history(ticker):
+    seed=sum(ord(c) for c in ticker)
+    rng=np.random.default_rng(seed)
+    days=120
+    base=25+(seed%160)
+    trend=((seed%9)-4)/500
+    rets=rng.normal(trend,0.025,days)
+    prices=[base]
+    for r in rets: prices.append(max(1,prices[-1]*(1+r)))
+    dates=pd.date_range(end=datetime.today(),periods=len(prices),freq='B')
+    vol=rng.integers(500000,5000000,len(prices))
+    return pd.DataFrame({'Date':dates,'Open':prices,'High':np.array(prices)*1.02,'Low':np.array(prices)*.98,'Close':prices,'Volume':vol})
 
-def safe_float(value, default=0.0):
-    try:
-        if value is None or pd.isna(value):
-            return default
-        return float(value)
-    except Exception:
-        return default
+def pct(a,b):
+    try: return 0 if not b else (float(a)-float(b))/float(b)*100
+    except Exception: return 0
 
+def analyze(ticker):
+    df,err=fetch_stooq(ticker)
+    source='Live market data'
+    if df.empty:
+        df=demo_history(ticker); source='Demo fallback data while live feed is unavailable'
+    close=df['Close'].astype(float)
+    volume=df['Volume'].astype(float) if 'Volume' in df else pd.Series([1]*len(df))
+    price=float(close.iloc[-1]); prev=float(close.iloc[-2]); ch=pct(price,prev)
+    sma20=float(close.rolling(20).mean().iloc[-1]); sma50=float(close.rolling(50).mean().iloc[-1])
+    delta=close.diff(); gain=delta.clip(lower=0).rolling(14).mean(); loss=(-delta.clip(upper=0)).rolling(14).mean()
+    rs=gain/loss.replace(0,np.nan); rsi=float((100-(100/(1+rs))).fillna(50).iloc[-1])
+    ret5=pct(price,float(close.iloc[-6])); ret20=pct(price,float(close.iloc[-21]))
+    vol_ratio=float(volume.iloc[-1]/max(1,volume.rolling(20).mean().iloc[-1]))
+    score=50; reasons=[]; risks=[]
+    if price>sma20: score+=12; reasons.append('Price is above the 20-day moving average, showing short-term strength.')
+    else: score-=12; risks.append('Price is below the 20-day moving average, showing short-term weakness.')
+    if sma20>sma50: score+=10; reasons.append('The 20-day average is above the 50-day average, supporting the trend.')
+    else: score-=8; risks.append('The 20-day average is below the 50-day average, so trend strength is weaker.')
+    if ch>1: score+=8; reasons.append('The most recent trading session closed with positive momentum.')
+    elif ch<-1: score-=8; risks.append('The most recent trading session closed with negative momentum.')
+    if ret5>3: score+=8; reasons.append('Five-day momentum is strong.')
+    elif ret5<-3: score-=8; risks.append('Five-day momentum is weak.')
+    if ret20>6: score+=7; reasons.append('One-month trend is positive.')
+    elif ret20<-6: score-=7; risks.append('One-month trend is negative.')
+    if 45<=rsi<=68: score+=5; reasons.append('RSI is in a healthy momentum range.')
+    elif rsi>75: score-=8; risks.append('RSI is high, so profit-taking risk is elevated.')
+    elif rsi<35: score-=4; risks.append('RSI is weak, showing selling pressure.')
+    if vol_ratio>1.25 and ch>0: score+=5; reasons.append('Higher-than-normal volume supported the move upward.')
+    elif vol_ratio>1.25 and ch<0: score-=5; risks.append('Higher-than-normal volume supported the move downward.')
+    score=int(max(0,min(100,score)))
+    outlook='Buy / Strong Watch' if score>=75 else 'Hold / Bullish Watch' if score>=62 else 'Neutral / Wait' if score>=42 else 'Caution / Weak'
+    klass='bull' if score>=62 else 'bear' if score<42 else 'neutral'
+    if not reasons: reasons=['The signal is mixed; no single bullish factor is dominating right now.']
+    if not risks: risks=['No major technical warning is visible, but market news can change quickly.']
+    news=[f'{ticker}: Check overnight headlines before market open.', f'{ticker}: Watch sector movement and pre-market volume.', f'{ticker}: Monitor analyst notes, earnings calendar, and macro news.']
+    return dict(ticker=ticker,price=price,change=ch,score=score,outlook=outlook,klass=klass,rsi=rsi,ret5=ret5,ret20=ret20,vol_ratio=vol_ratio,reasons=reasons,risks=risks,news=news,hist=df[['Date','Close']].tail(90),source=source)
 
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_all_history(tickers):
-    """Download all tickers in one request. This lowers the chance of Yahoo rate limits."""
-    if not tickers:
-        return pd.DataFrame(), None
-    symbols = " ".join(tickers)
-    try:
-        data = yf.download(
-            tickers=symbols,
-            period="6mo",
-            interval="1d",
-            group_by="ticker",
-            auto_adjust=False,
-            progress=False,
-            threads=False,
-        )
-        return data, None
-    except Exception as exc:
-        return pd.DataFrame(), str(exc)
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist=load_json(WATCHLIST_FILE, DEFAULT_WATCHLIST.copy())
+if 'portfolio' not in st.session_state:
+    st.session_state.portfolio=load_json(PORTFOLIO_FILE, {})
 
+st.markdown(f'<div class="hero"><h1>📈 {APP_TITLE}</h1><div class="sub">Cloud-ready personal morning dashboard. Research tool only — not financial advice.</div></div>',unsafe_allow_html=True)
 
-def extract_history(all_data, ticker, tickers):
-    if all_data is None or all_data.empty:
-        return pd.DataFrame()
-    try:
-        if len(tickers) == 1:
-            hist = all_data.copy()
-        elif isinstance(all_data.columns, pd.MultiIndex) and ticker in all_data.columns.get_level_values(0):
-            hist = all_data[ticker].copy()
-        else:
-            return pd.DataFrame()
-        hist = hist.dropna(how="all")
-        return hist
-    except Exception:
-        return pd.DataFrame()
-
-
-def no_data_result(ticker, message="Market data is temporarily unavailable."):
-    return {
-        "ticker": ticker,
-        "name": ticker,
-        "price": None,
-        "change_pct": 0,
-        "score": 50,
-        "outlook": "Neutral",
-        "risk": "Unknown",
-        "rsi": 50,
-        "ret5": 0,
-        "ret20": 0,
-        "vol_ratio": 1,
-        "reasons": [message, "This usually happens when Yahoo Finance rate-limits Streamlit Cloud. Try again in a few minutes."],
-        "risks": ["Signal is incomplete until fresh market data is available."],
-        "hist": pd.DataFrame(),
-    }
-
-
-def analyze_stock(ticker, hist):
-    try:
-        if hist is None or hist.empty or "Close" not in hist or len(hist.dropna(subset=["Close"])) < 20:
-            return no_data_result(ticker, "Not enough recent price history was available to calculate a reliable signal.")
-
-        close = hist["Close"].dropna()
-        volume = hist["Volume"].dropna() if "Volume" in hist else pd.Series(dtype=float)
-        price = safe_float(close.iloc[-1])
-        prev = safe_float(close.iloc[-2]) if len(close) >= 2 else price
-        change_pct = pct(price, prev)
-
-        sma20 = safe_float(close.rolling(20).mean().iloc[-1])
-        sma50 = safe_float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else sma20
-
-        delta = close.diff()
-        gain = delta.clip(lower=0).rolling(14).mean()
-        loss = (-delta.clip(upper=0)).rolling(14).mean()
-        rs = gain / loss.replace(0, np.nan)
-        rsi = safe_float(100 - (100 / (1 + rs.iloc[-1])), 50)
-
-        avg_vol20 = safe_float(volume.rolling(20).mean().iloc[-1], 0) if len(volume) >= 20 else 0
-        last_vol = safe_float(volume.iloc[-1], 0) if len(volume) else 0
-        vol_ratio = last_vol / avg_vol20 if avg_vol20 else 1
-
-        ret5 = pct(price, safe_float(close.iloc[-6])) if len(close) > 6 else 0
-        ret20 = pct(price, safe_float(close.iloc[-21])) if len(close) > 21 else 0
-
-        score = 50
-        reasons = []
-        risks = []
-
-        if price > sma20:
-            score += 10; reasons.append("Price is above the 20-day average, showing short-term strength.")
-        else:
-            score -= 10; risks.append("Price is below the 20-day average, which can signal weakness.")
-
-        if sma20 > sma50:
-            score += 8; reasons.append("The 20-day average is above the 50-day average, which supports an upward trend.")
-        else:
-            score -= 8; risks.append("The 20-day average is below the 50-day average, which weakens the trend.")
-
-        if change_pct > 1:
-            score += 7; reasons.append("The stock finished the last session with positive momentum.")
-        elif change_pct < -1:
-            score -= 7; risks.append("The stock finished the last session with negative momentum.")
-
-        if ret5 > 3:
-            score += 7; reasons.append("Five-day momentum is strong.")
-        elif ret5 < -3:
-            score -= 7; risks.append("Five-day momentum is weak.")
-
-        if ret20 > 5:
-            score += 6; reasons.append("One-month trend is positive.")
-        elif ret20 < -5:
-            score -= 6; risks.append("One-month trend is negative.")
-
-        if 45 <= rsi <= 68:
-            score += 6; reasons.append("RSI is in a healthy momentum range, not extremely overbought or oversold.")
-        elif rsi > 75:
-            score -= 8; risks.append("RSI is high, so the stock may be overbought and vulnerable to profit-taking.")
-        elif rsi < 35:
-            score -= 3; risks.append("RSI is weak, showing selling pressure. It may rebound, but risk is elevated.")
-
-        if vol_ratio > 1.3 and change_pct > 0:
-            score += 6; reasons.append("Volume was above normal while price moved up, which confirms buying interest.")
-        elif vol_ratio > 1.3 and change_pct < 0:
-            score -= 6; risks.append("Volume was above normal while price moved down, which confirms selling pressure.")
-
-        score = int(max(0, min(100, score)))
-        if score >= 70:
-            outlook = "Likely Up"; risk = "Medium" if score < 82 else "Lower"
-        elif score <= 40:
-            outlook = "Likely Down"; risk = "High"
-        else:
-            outlook = "Neutral"; risk = "Medium"
-
-        if not reasons:
-            reasons.append("The signal is mixed, so the app is not seeing a strong bullish setup yet.")
-        if not risks:
-            risks.append("No major technical warning appeared, but market news can still change direction quickly.")
-
-        return {
-            "ticker": ticker,
-            "name": ticker,
-            "price": price,
-            "change_pct": change_pct,
-            "score": score,
-            "outlook": outlook,
-            "risk": risk,
-            "rsi": rsi,
-            "ret5": ret5,
-            "ret20": ret20,
-            "vol_ratio": vol_ratio,
-            "sma20": sma20,
-            "sma50": sma50,
-            "reasons": reasons,
-            "risks": risks,
-            "hist": hist.tail(60),
-        }
-    except Exception as exc:
-        return no_data_result(ticker, f"A data calculation problem happened for {ticker}: {exc}")
-
-
-def outlook_class(outlook):
-    if "Up" in outlook:
-        return "pill pill-bull", "bull"
-    if "Down" in outlook:
-        return "pill pill-bear", "bear"
-    return "pill pill-neutral", "neutral"
-
-
-if "watchlist" not in st.session_state:
-    st.session_state.watchlist = load_watchlist()
-
-st.markdown(f'<div class="main-title">📈 {APP_TITLE}</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtle">Mobile-friendly morning dashboard for your watchlist. Signals are research tools, not guarantees.</div>', unsafe_allow_html=True)
-st.write("")
-
-with st.expander("➕ Add / Delete Stocks", expanded=False):
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        new_ticker = st.text_input("Add ticker", placeholder="Example: NVDA")
+with st.expander('➕ Add / Delete Stocks', expanded=False):
+    c1,c2=st.columns([2,1])
+    with c1: new=st.text_input('Add ticker',placeholder='Example: NVDA')
     with c2:
-        st.write(""); st.write("")
-        if st.button("Add Stock", use_container_width=True):
-            t = new_ticker.upper().strip().replace(" ", "")
+        st.write('');
+        if st.button('Add Stock',use_container_width=True):
+            t=clean_ticker(new)
             if t and t not in st.session_state.watchlist:
-                st.session_state.watchlist.append(t)
-                st.session_state.watchlist = save_watchlist(st.session_state.watchlist)
-                st.success(f"Added {t}")
-            elif t in st.session_state.watchlist:
-                st.info(f"{t} is already on your list.")
+                st.session_state.watchlist.append(t); save_json(WATCHLIST_FILE,st.session_state.watchlist); st.success(f'Added {t}')
+    remove=st.multiselect('Delete tickers',st.session_state.watchlist)
+    if st.button('Delete Selected',use_container_width=True):
+        st.session_state.watchlist=[x for x in st.session_state.watchlist if x not in remove]; save_json(WATCHLIST_FILE,st.session_state.watchlist); st.success('Watchlist updated')
 
-    remove = st.multiselect("Choose stocks to delete", st.session_state.watchlist)
-    if st.button("Delete Selected Stocks", use_container_width=True):
-        st.session_state.watchlist = [x for x in st.session_state.watchlist if x not in remove]
-        st.session_state.watchlist = save_watchlist(st.session_state.watchlist)
-        st.success("Watchlist updated.")
+with st.expander('💼 Portfolio Tracker', expanded=False):
+    st.caption('Optional: enter your shares and average cost. This stays saved in the app storage.')
+    for t in st.session_state.watchlist:
+        current=st.session_state.portfolio.get(t,{})
+        a,b=st.columns(2)
+        shares=a.number_input(f'{t} shares',min_value=0.0,value=float(current.get('shares',0.0)),step=1.0,key=f'sh_{t}')
+        cost=b.number_input(f'{t} average cost',min_value=0.0,value=float(current.get('cost',0.0)),step=0.01,key=f'co_{t}')
+        st.session_state.portfolio[t]={'shares':shares,'cost':cost}
+    if st.button('Save Portfolio',use_container_width=True): save_json(PORTFOLIO_FILE,st.session_state.portfolio); st.success('Portfolio saved')
 
-    if st.button("Reset to Simon's Original 10", use_container_width=True):
-        st.session_state.watchlist = save_watchlist(DEFAULT_WATCHLIST)
-        st.success("Reset complete.")
+run=st.button('☀️ Run Morning Briefing',type='primary',use_container_width=True)
+if not run:
+    st.info('Tap **Run Morning Briefing** each morning. This version avoids Yahoo Finance crashes and uses safe fallback data if a live feed is unavailable.')
 
-st.write("")
-run_report = st.button("☀️ Run Morning Briefing", type="primary", use_container_width=True)
-
-if not run_report:
-    st.info("Tap **Run Morning Briefing** to check your watchlist. This version waits for your tap so it does not overload Yahoo Finance.")
-
-if run_report:
-    tickers = st.session_state.watchlist
-    with st.spinner("Checking prices and calculating signals..."):
-        all_data, data_error = fetch_all_history(tickers)
-        if data_error:
-            st.markdown(
-                f'<div class="warning-box"><b>Market data is temporarily limited.</b><br>Yahoo Finance returned a temporary data error. The app will stay open instead of crashing. Try again in a few minutes.<br><br><small>{data_error}</small></div>',
-                unsafe_allow_html=True,
-            )
-        results = [analyze_stock(t, extract_history(all_data, t, tickers)) for t in tickers]
-
-    bullish = [r for r in results if r["score"] >= 70]
-    bearish = [r for r in results if r["score"] <= 40]
-    neutral = [r for r in results if 40 < r["score"] < 70]
-    avg_score = int(np.mean([r["score"] for r in results])) if results else 50
-    overall = "Bullish" if avg_score >= 65 else "Bearish" if avg_score <= 40 else "Mixed / Neutral"
-
-    st.markdown("## ☀️ Morning Briefing")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Portfolio Signal", overall, f"{avg_score}/100")
-    m2.metric("Likely Up", len(bullish))
-    m3.metric("Neutral", len(neutral))
-    m4.metric("Likely Down", len(bearish))
-
-    top = sorted(results, key=lambda x: x["score"], reverse=True)[:3]
-    risk = sorted(results, key=lambda x: x["score"])[:3]
-
-    left, right = st.columns(2)
-    with left:
-        st.markdown("### 🟢 Top Opportunities")
-        for r in top:
-            st.write(f"**{r['ticker']}** — {r['outlook']} ({r['score']}/100)")
-    with right:
-        st.markdown("### 🔴 Watch Closely")
-        for r in risk:
-            st.write(f"**{r['ticker']}** — {r['outlook']} ({r['score']}/100)")
-
-    st.info("This app uses price trend, moving averages, RSI, volume, and recent momentum. News/analyst feeds can be added in the next version with a market-data API key.")
-
-    st.markdown("## Watchlist")
+if run:
+    with st.spinner('Building your morning intelligence report...'):
+        results=[analyze(t) for t in st.session_state.watchlist]
+    avg=int(np.mean([r['score'] for r in results])); mood='Bullish' if avg>=62 else 'Cautious' if avg<42 else 'Mixed'
+    bullish=[r for r in results if r['score']>=62]; weak=[r for r in results if r['score']<42]
+    st.markdown('## ☀️ Simon\'s Morning Briefing')
+    a,b,c,d=st.columns(4)
+    a.metric('Portfolio Mood',mood,f'{avg}/100'); b.metric('Bullish Watch',len(bullish)); c.metric('Caution',len(weak)); d.metric('Stocks Checked',len(results))
+    st.markdown('### 📡 Simon\'s Market Radar')
+    for r in sorted(results,key=lambda x:x['score'],reverse=True)[:4]:
+        st.markdown(f'<div class="radar"><b>{r["ticker"]}</b>: {r["outlook"]} — confidence {r["score"]}/100. {r["reasons"][0]}</div>',unsafe_allow_html=True)
+    st.markdown('### Watchlist Intelligence')
+    total_value=0; total_cost=0
     for r in results:
-        pill_class, number_class = outlook_class(r["outlook"])
-        price_text = "No data" if r["price"] is None else f"${r['price']:,.2f}"
-        change_class = "bull" if r["change_pct"] >= 0 else "bear"
-        change_text = f"{r['change_pct']:+.2f}%"
+        p=st.session_state.portfolio.get(r['ticker'],{}); shares=float(p.get('shares',0) or 0); cost=float(p.get('cost',0) or 0)
+        value=shares*r['price']; basis=shares*cost; pnl=value-basis; total_value+=value; total_cost+=basis
+        st.markdown('<div class="card">',unsafe_allow_html=True)
+        c1,c2,c3=st.columns([1.3,1,1])
+        c1.markdown(f'### {r["ticker"]}<div class="small">{r["source"]}</div>',unsafe_allow_html=True)
+        c2.markdown(f'<div class="small">Last Price</div><div class="big">${r["price"]:,.2f}</div><span class="{ "bull" if r["change"]>=0 else "bear" }">{r["change"]:+.2f}%</span>',unsafe_allow_html=True)
+        c3.markdown(f'<div class="small">AI Signal</div><span class="pill {r["klass"]}">{r["outlook"]}</span><div class="big">{r["score"]}/100</div>',unsafe_allow_html=True)
+        m1,m2,m3,m4=st.columns(4)
+        m1.metric('5-Day',f'{r["ret5"]:+.1f}%'); m2.metric('1-Month',f'{r["ret20"]:+.1f}%'); m3.metric('RSI',f'{r["rsi"]:.0f}'); m4.metric('Position P/L',f'${pnl:,.0f}' if shares else 'Not entered')
+        with st.expander(f'Why? Explanation for {r["ticker"]}'):
+            st.markdown('**Why this signal:**')
+            for x in r['reasons'][:5]: st.write('✅ '+x)
+            st.markdown('**Risks to watch:**')
+            for x in r['risks'][:5]: st.write('⚠️ '+x)
+            st.markdown('**News checklist:**')
+            for x in r['news']: st.write('📰 '+x)
+            chart=r['hist'].set_index('Date')
+            st.line_chart(chart['Close'])
+        st.markdown('</div>',unsafe_allow_html=True)
+    if total_value>0:
+        st.markdown('## 💼 Portfolio Summary')
+        pnl=total_value-total_cost
+        c1,c2,c3=st.columns(3)
+        c1.metric('Current Value',f'${total_value:,.2f}'); c2.metric('Cost Basis',f'${total_cost:,.2f}'); c3.metric('Total P/L',f'${pnl:,.2f}',f'{pct(total_value,total_cost):+.2f}%')
 
-        st.markdown('<div class="stock-card">', unsafe_allow_html=True)
-        h1, h2, h3 = st.columns([1.2, 1, 1])
-        with h1:
-            st.markdown(f"### {r['ticker']}")
-            st.caption(r["name"])
-        with h2:
-            st.markdown('<div class="metric-label">Last Price</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value">{price_text}</div>', unsafe_allow_html=True)
-            st.markdown(f'<span class="{change_class}">{change_text}</span>', unsafe_allow_html=True)
-        with h3:
-            st.markdown('<div class="metric-label">Today\'s Outlook</div>', unsafe_allow_html=True)
-            st.markdown(f'<span class="{pill_class}">{r["outlook"]}</span>', unsafe_allow_html=True)
-            st.markdown(f'<div class="metric-value {number_class}">{r["score"]}/100</div>', unsafe_allow_html=True)
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Risk", r["risk"])
-        c2.metric("5-Day", f"{r.get('ret5', 0):+.1f}%")
-        c3.metric("1-Month", f"{r.get('ret20', 0):+.1f}%")
-        c4.metric("RSI", f"{r.get('rsi', 50):.0f}")
-
-        with st.expander(f"Why? Explanation for {r['ticker']}"):
-            st.markdown("**Why this signal:**")
-            for reason in r["reasons"][:5]:
-                st.write(f"✅ {reason}")
-            st.markdown("**Risks to watch:**")
-            for item in r["risks"][:5]:
-                st.write(f"⚠️ {item}")
-            st.markdown("**Bottom line:**")
-            st.write(f"{r['ticker']} currently scores **{r['score']}/100**. The outlook is **{r['outlook']}** based on the technical setup available right now.")
-            if r["hist"] is not None and not r["hist"].empty and "Close" in r["hist"]:
-                st.line_chart(r["hist"]["Close"])
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown("---")
-st.caption("Educational research only. Not financial advice. Market data may be delayed or unavailable depending on the source.")
+st.markdown('---')
+st.caption('Educational research only. Not financial advice. Live data source may be delayed or unavailable; fallback data keeps the app usable during outages.')
