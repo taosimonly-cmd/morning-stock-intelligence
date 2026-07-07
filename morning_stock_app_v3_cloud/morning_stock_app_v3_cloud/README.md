@@ -1,10 +1,15 @@
-# Morning Stock Intelligence Pro v4
+# Morning Stock Intelligence Pro v5
 
-Cloud-ready version. Main file path for Streamlit Cloud: `app.py`
+Version 5 improves the stock data engine and clearly labels every quote as Live/Delayed or Fallback/Sample.
 
-Upload these three files to the TOP LEVEL of your GitHub repository:
+## Streamlit main file path
+If uploaded at the top level of GitHub, use:
+
+app.py
+
+If uploaded inside the existing nested folder, keep using that nested app.py path.
+
+## Files to upload
 - app.py
 - requirements.txt
 - README.md
-
-Then update Streamlit Cloud main file path to `app.py` and reboot/redeploy.
