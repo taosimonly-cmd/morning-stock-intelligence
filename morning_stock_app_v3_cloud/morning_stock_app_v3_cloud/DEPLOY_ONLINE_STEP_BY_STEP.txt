@@ -1,0 +1,33 @@
+GOAL
+Put this stock app online so your computer does NOT need to stay on.
+
+BEST FIRST HOSTING OPTION
+Streamlit Community Cloud.
+
+WHAT YOU NEED
+1. A GitHub account.
+2. A Streamlit Community Cloud account.
+3. This folder uploaded to a new GitHub repository.
+
+STEP BY STEP OVERVIEW
+1. Go to github.com and sign in.
+2. Create a new repository named: morning-stock-intelligence
+3. Upload these files into the repository:
+   - app.py
+   - requirements.txt
+   - .streamlit/config.toml
+4. Go to share.streamlit.io
+5. Sign in with GitHub.
+6. Click New app.
+7. Choose repository: morning-stock-intelligence
+8. Main file path: app.py
+9. Click Deploy.
+10. Streamlit gives you a public web address.
+11. Open that address on your phone.
+12. Add it to your phone home screen.
+
+AFTER THIS WORKS
+Your computer can be turned off. Your phone will still open the app from anywhere.
+
+IMPORTANT
+This app is a research assistant, not financial advice. Signals are estimates, not guaranteed predictions.

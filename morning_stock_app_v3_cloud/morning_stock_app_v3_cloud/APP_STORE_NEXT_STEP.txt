@@ -1,0 +1,24 @@
+REAL IPHONE / ANDROID APP PLAN
+
+Once the online version is working, there are two choices:
+
+OPTION A - Fast and practical
+Use the hosted web app and add it to your phone home screen.
+This feels like an app and is easiest to maintain.
+
+OPTION B - Real App Store app
+Convert the web app into a real mobile app using React Native or Flutter.
+Requirements:
+- Apple Developer account for iPhone publishing.
+- Google Play Developer account for Android publishing.
+- A hosted backend for stock/news data.
+- Login system if you want private account access.
+- Push notification service for morning alerts.
+
+RECOMMENDED NEXT BUILD
+1. Host the current app online first.
+2. Add a login screen.
+3. Add real news API and analyst data API.
+4. Add scheduled morning briefing.
+5. Add push notifications.
+6. Convert to Android/iPhone app if still needed.
